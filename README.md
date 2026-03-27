@@ -1,5 +1,9 @@
 # Assignment 02. Blockchain Fundamentals
 
+Anggota Kelompok:
+1. Benjamin Khawarizmi Habibi - 5027231078
+2. Muhammad Dzaky Ahnaf - 50272310
+3. Salomo - 5027221063 - 5027231039
 
 # ⛓️ Fundamental Blockchain dengan Digital Signature & Multi-Node
 
