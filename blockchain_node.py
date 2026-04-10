@@ -10,42 +10,42 @@ from Crypto.Hash import SHA256
 import binascii
 
 class Transaction:
-    def __init__(self, sender, receiver, amount, signature):
+    def __init__(self, sender, receiver, amount, signature=None):
         self.sender = sender
         self.receiver = receiver
         self.amount = amount
         self.signature = signature
 
-    def to_dict(self):
-        return {
+    def to_dict(self, include_signature=True):
+        """Mengembalikan dict transaksi. Signature dipisahkan agar hash tetap konsisten."""
+        data = {
             "sender": self.sender,
             "receiver": self.receiver,
-            "amount": self.amount,
-            "signature": self.signature
+            "amount": self.amount
         }
-    
-    def sign_trasaction(self, private_key):
-        """Menandatangani transaksi dengan private key."""
-        if self.sender == "Network": # Reward tidak butuh signature dari user
-            return
-        
-        private_key = RSA.import_key(binascii.unhexlify(private_key))
-        transaction_data = json.dumps(self.to_dict(), sort_keys=True).encode()
-        hash_obj = SHA256.new(transaction_data)
-        signature = pkcs1_15.new(private_key).sign(hash_obj)
-        self.signature = binascii.hexlify(signature).decode('ascii')
+        if include_signature and self.signature:
+            data["signature"] = self.signature
+        return data
 
     def is_valid(self):
-        """Memverifikasi signature transaksi."""
-        if self.sender == "Network":
+        """Memverifikasi signature. Harus cocok dengan cara sign_tool.py bekerja."""
+        if self.sender == "Network": # Reward dari sistem selalu valid
             return True
         if not self.signature:
             return False
         
         try:
+            # Data yang di-hash harus SAMA dengan di sign_tool.py
+            # Yaitu hanya sender, receiver, dan amount
+            hash_data = {
+                "sender": self.sender,
+                "receiver": self.receiver,
+                "amount": self.amount
+            }
             public_key = RSA.import_key(binascii.unhexlify(self.sender))
-            transaction_data = json.dumps(self.to_dict(), sort_keys=True).encode()
+            transaction_data = json.dumps(hash_data, sort_keys=True).encode()
             hash_obj = SHA256.new(transaction_data)
+            
             pkcs1_15.new(public_key).verify(hash_obj, binascii.unhexlify(self.signature))
             return True
         except (ValueError, TypeError):
@@ -89,7 +89,8 @@ class Blockchain:
 
     def register_node(self, address):
         parsed_url = urlparse(address)
-        self.nodes.add(parsed_url.netloc)
+        if parsed_url.netloc:
+            self.nodes.add(parsed_url.netloc)
 
     def add_transaction(self, transaction):
         if not transaction.is_valid():
@@ -98,8 +99,8 @@ class Blockchain:
         return True
 
     def mine_pending_transactions(self, miner_address):
-        # Tambahkan reward untuk miner
-        reward_tx = Transaction("Network", miner_address, self.mining_reward)
+        # Tambahkan reward (Tanpa signature karena sender="Network")
+        reward_tx = Transaction("Network", miner_address, self.mining_reward, None)
         self.pending_transactions.append(reward_tx)
 
         new_block = Block(len(self.chain), self.pending_transactions, self.chain[-1].hash)
@@ -109,36 +110,29 @@ class Blockchain:
         self.pending_transactions = []
         return new_block
 
-    def is_valid_chain(self, chain):
-        # Logika validasi chain dari node lain
-        for i in range(1, len(chain)):
-            current = chain[i]
-            prev = chain[i-1]
-            # (Sederhananya kita asumsikan struktur sudah benar dalam simulasi ini)
-            if current['previous_hash'] != prev['hash']:
-                return False
-        return True
-
     def resolve_conflicts(self):
-        """Consensus: Ambil chain terpanjang di network."""
+        """Konsensus: Mengambil chain terpanjang dari jaringan."""
         neighbours = self.nodes
         new_chain = None
         max_length = len(self.chain)
 
         for node in neighbours:
-            response = requests.get(f'http://{node}/chain')
-            if response.status_code == 200:
-                length = response.json()['length']
-                chain = response.json()['chain']
-                if length > max_length: # Sederhananya validasi dilewati untuk demo
-                    max_length = length
-                    new_chain = chain
+            try:
+                response = requests.get(f'http://{node}/chain', timeout=5)
+                if response.status_code == 200:
+                    length = response.json()['length']
+                    chain = response.json()['chain']
+                    if length > max_length:
+                        max_length = length
+                        new_chain = chain
+            except:
+                continue
         
         if new_chain:
-            # Reconstruct chain from dict
             self.chain = []
             for b in new_chain:
-                txs = [Transaction(t['sender'], t['receiver'], t['amount']) for t in b['transactions']]
+                # Memastikan constructor Transaction dipanggil dengan 4 argumen
+                txs = [Transaction(t['sender'], t['receiver'], t['amount'], t.get('signature')) for t in b['transactions']]
                 block = Block(b['index'], txs, b['previous_hash'], b['nonce'])
                 block.timestamp = b['timestamp']
                 block.hash = b['hash']
@@ -155,18 +149,18 @@ def new_transaction():
     values = request.get_json()
     required = ['sender', 'receiver', 'amount', 'signature']
     if not all(k in values for k in required):
-        return 'Missing values', 400
+        return 'Data tidak lengkap', 400
     
     tx = Transaction(values['sender'], values['receiver'], values['amount'], values['signature'])
     if blockchain.add_transaction(tx):
-        return jsonify({'message': 'Transaksi ditambahkan ke pool!'}), 201
-    return jsonify({'message': 'Signature tidak valid!'}), 400
+        return jsonify({'message': 'Berhasil! Transaksi masuk ke pool.'}), 201
+    return jsonify({'message': 'Gagal! Signature digital tidak valid.'}), 400
 
 @app.route('/mine', methods=['GET'])
 def mine():
     miner_addr = request.args.get('miner')
     if not miner_addr:
-        return "Miner address required", 400
+        return "Butuh alamat miner untuk reward", 400
     block = blockchain.mine_pending_transactions(miner_addr)
     return jsonify({
         'message': "Block baru berhasil ditambang!",
@@ -195,26 +189,18 @@ def register_nodes():
     nodes = values.get('nodes')
     for node in nodes:
         blockchain.register_node(node)
-    return jsonify({'message': 'Node berhasil didaftarkan', 'total_nodes': list(blockchain.nodes)}), 201
+    return jsonify({'message': 'Node berhasil terhubung', 'total_nodes': list(blockchain.nodes)}), 201
 
 @app.route('/nodes/resolve', methods=['GET'])
 def consensus():
     replaced = blockchain.resolve_conflicts()
     if replaced:
-        return jsonify({'message': 'Chain diganti dengan yang terpanjang', 'new_chain': 'updated'}), 200
-    return jsonify({'message': 'Chain sudah yang terbaru', 'chain': 'current'}), 200
-
-# Endpoint bantu untuk generate keypair (untuk demo)
-@app.route('/wallet/generate', methods=['GET'])
-def generate_wallet():
-    key = RSA.generate(1024)
-    private_key = binascii.hexlify(key.export_key()).decode('ascii')
-    public_key = binascii.hexlify(key.publickey().export_key()).decode('ascii')
-    return jsonify({'private_key': private_key, 'public_key': public_key})
+        return jsonify({'message': 'Chain diperbarui (mengikuti yang terpanjang)'}), 200
+    return jsonify({'message': 'Chain sudah sinkron'}), 200
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
     parser = ArgumentParser()
-    parser.add_argument('-p', '--port', default=5000, type=int, help='port to listen on')
+    parser.add_argument('-p', '--port', default=5000, type=int, help='port')
     args = parser.parse_args()
     app.run(host='0.0.0.0', port=args.port)
