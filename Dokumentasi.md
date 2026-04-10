@@ -1,3 +1,11 @@
+## Sebelum memulai mining kita seharusnya setup untuk node dan generate signature
+
+![alt text](image-3.png)
+
+![alt text](image-4.png)
+
+![alt text](image-5.png)
+
 ## Langkah 1: Proses Mining & Reward (Node 1)
 Setelah transaksi masuk ke pool (pending), kita harus menambangnya ke dalam sebuah Block agar resmi masuk ke Blockchain.
 
